@@ -16,7 +16,7 @@ class Struct(AbstractType):
             for i, name in enumerate(self.SCHEMA.names):
                 self.__dict__[name] = args[i]
         elif len(args) > 0:
-            raise ValueError('Args must be empty or mirror schema')
+            raise ValueError('Args must be empty or mirror schema. len(args) = %d, len(schema) = %d' % (len(args), len(self.SCHEMA.fields)))
         else:
             for name in self.SCHEMA.names:
                 self.__dict__[name] = kwargs.pop(name, None)

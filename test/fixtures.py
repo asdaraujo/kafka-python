@@ -173,7 +173,7 @@ class ZookeeperFixture(Fixture):
         self.child.stop()
         self.child = None
         self.out("Done!")
-        shutil.rmtree(self.tmp_dir)
+        #shutil.rmtree(self.tmp_dir)
 
     def __del__(self):
         self.close()
@@ -183,7 +183,8 @@ class KafkaFixture(Fixture):
     @classmethod
     def instance(cls, broker_id, zk_host, zk_port, zk_chroot=None,
                  host=None, port=None,
-                 transport='PLAINTEXT', replicas=1, partitions=2):
+                 transport='PLAINTEXT', replicas=1, partitions=2,
+                 auth_mechanism='PLAIN'):
         if zk_chroot is None:
             zk_chroot = "kafka-python_" + str(uuid.uuid4()).replace("-", "_")
         if "KAFKA_URI" in os.environ:
@@ -206,21 +207,23 @@ class KafkaFixture(Fixture):
             # Note that even though we specify the bind host in bracket notation, Kafka responds to the bootstrap
             # metadata request without square brackets later.
             if host is None:
-                host = "[::1]"
+                host = "localhost"
             fixture = KafkaFixture(host, port, broker_id,
                                    zk_host, zk_port, zk_chroot,
                                    transport=transport,
-                                   replicas=replicas, partitions=partitions)
+                                   replicas=replicas, partitions=partitions,
+                                   auth_mechanism=auth_mechanism)
             fixture.open()
         return fixture
 
     def __init__(self, host, port, broker_id, zk_host, zk_port, zk_chroot,
-                 replicas=1, partitions=2, transport='PLAINTEXT'):
+                 replicas=1, partitions=2, transport='PLAINTEXT', auth_mechanism='PLAIN'):
         self.host = host
         self.port = port
 
         self.broker_id = broker_id
         self.transport = transport.upper()
+        self.auth_mechanism = auth_mechanism.upper()
         self.ssl_dir = self.test_resource('ssl')
 
         # TODO: checking for port connection would be better than scanning logs
@@ -239,9 +242,21 @@ class KafkaFixture(Fixture):
         self.child = None
         self.running = False
 
+        self.kerberos_realm = os.environ['KERBEROS_REALM'] if 'KERBEROS_REALM' in os.environ else None
+        self.kafka_keytab = os.environ['KAFKA_KEYTAB'] if 'KAFKA_KEYTAB' in os.environ else None
+        if self.kerberos_realm is None and self.kafka_keytab is not None or \
+           self.kerberos_realm is not None and self.kafka_keytab is None:
+            raise RuntimeError("KERBEROS_REALM and KAFKA_KEYTAB must be either both set or both unset")
+        elif self.kerberos_realm is None and self.kafka_keytab is None:
+           self.is_kerberos_enabled = False
+        else:
+           self.is_kerberos_enabled = True
+
     def kafka_run_class_env(self):
         env = super(KafkaFixture, self).kafka_run_class_env()
         env['LOG_DIR'] = os.path.join(self.tmp_dir, 'logs')
+        if self.is_kerberos_enabled:
+            env['KAFKA_OPTS'] = "-Djava.security.auth.login.config=%s" % os.path.join(self.tmp_dir, "jaas.conf")
         return env
 
     def out(self, message):
@@ -288,6 +303,9 @@ class KafkaFixture(Fixture):
         # Configure Kafka child process
         properties = os.path.join(self.tmp_dir, "kafka.properties")
         template = self.test_resource("kafka.properties")
+        if self.is_kerberos_enabled:
+            jaas_template = self.test_resource("jaas.conf")
+            self.render_template(jaas_template, os.path.join(self.tmp_dir, "jaas.conf"), vars(self))
         args = self.kafka_run_class_args("kafka.Kafka", properties)
         env = self.kafka_run_class_env()
 
@@ -333,5 +351,5 @@ class KafkaFixture(Fixture):
         self.child.stop()
         self.child = None
         self.out("Done!")
-        shutil.rmtree(self.tmp_dir)
+        #shutil.rmtree(self.tmp_dir)
         self.running = False

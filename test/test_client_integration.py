@@ -1,3 +1,4 @@
+import time
 import os
 
 from kafka.errors import KafkaTimeoutError
@@ -50,31 +51,32 @@ class TestKafkaClientIntegration(KafkaIntegrationTestCase):
 
     def test_send_produce_request_maintains_request_response_order(self):
 
-        self.client.ensure_topic_exists('foo')
-        self.client.ensure_topic_exists('bar')
+        try:
+            self.ensure_topics(['foo', 'bar'], num_partitions=2)
 
-        requests = [
-            ProduceRequestPayload(
-                'foo', 0,
-                [create_message(b'a'), create_message(b'b')]),
-            ProduceRequestPayload(
-                'bar', 1,
-                [create_message(b'a'), create_message(b'b')]),
-            ProduceRequestPayload(
-                'foo', 1,
-                [create_message(b'a'), create_message(b'b')]),
-            ProduceRequestPayload(
-                'bar', 0,
-                [create_message(b'a'), create_message(b'b')]),
-        ]
+            requests = [
+                ProduceRequestPayload(
+                    'foo', 0,
+                    [create_message(b'a'), create_message(b'b')]),
+                ProduceRequestPayload(
+                    'bar', 1,
+                    [create_message(b'a'), create_message(b'b')]),
+                ProduceRequestPayload(
+                    'foo', 1,
+                    [create_message(b'a'), create_message(b'b')]),
+                ProduceRequestPayload(
+                    'bar', 0,
+                    [create_message(b'a'), create_message(b'b')]),
+            ]
 
-        responses = self.client.send_produce_request(requests)
-        while len(responses):
-            request = requests.pop()
-            response = responses.pop()
-            self.assertEqual(request.topic, response.topic)
-            self.assertEqual(request.partition, response.partition)
-
+            responses = self.client.send_produce_request(requests)
+            while len(responses):
+                request = requests.pop()
+                response = responses.pop()
+                self.assertEqual(request.topic, response.topic)
+                self.assertEqual(request.partition, response.partition)
+        finally:
+            self.delete_topics(['foo', 'bar'])
 
     ####################
     #   Offset Tests   #
@@ -91,3 +93,22 @@ class TestKafkaClientIntegration(KafkaIntegrationTestCase):
         self.assertEqual(resp.error, 0)
         self.assertEqual(resp.offset, 42)
         self.assertEqual(resp.metadata, '')  # Metadata isn't stored for now
+
+    #########################
+    #   KafkaClient Tests   #
+    #########################
+
+    @kafka_versions('>=0.8.1')
+    def test_create_delete_topics(self):
+        try:
+            self.ensure_topics(['topic1', 'topic2', 'topic3'])
+            self.kafka_client.poll(future=self.kafka_client.set_topics(['topic1','topic2']))
+            assert set(['topic1', 'topic2']) == set(self.get_topics())
+            self.kafka_client.poll(future=self.kafka_client.add_topic('topic2'))
+            assert set(['topic1', 'topic2']) == set(self.get_topics())
+            self.kafka_client.poll(future=self.kafka_client.add_topic('topic4')) # non-existent topic
+            assert set(['topic1', 'topic2']) == set(self.get_topics())
+            self.kafka_client.poll(future=self.kafka_client.add_topic('topic3'))
+            assert set(['topic1', 'topic2', 'topic3']) == set(self.get_topics())
+        finally: 
+            self.delete_topics(['topic1', 'topic2', 'topic3'])
