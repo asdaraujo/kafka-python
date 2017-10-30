@@ -217,11 +217,12 @@ class KafkaFixture(Fixture):
         return fixture
 
     def __init__(self, host, port, broker_id, zk_host, zk_port, zk_chroot,
-                 replicas=1, partitions=2, transport='PLAINTEXT', auth_mechanism='PLAIN'):
+                 replicas=1, partitions=2, auto_create_topic=True, transport='PLAINTEXT', auth_mechanism='PLAIN'):
         self.host = host
         self.port = port
 
         self.broker_id = broker_id
+        self.auto_create_topic = auto_create_topic
         self.transport = transport.upper()
         self.auth_mechanism = auth_mechanism.upper()
         self.ssl_dir = self.test_resource('ssl')

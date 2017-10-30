@@ -109,6 +109,7 @@ class SimpleClient(object):
         # If topic does not already exist, this will raise
         # UnknownTopicOrPartitionError if not auto-creating
         # LeaderNotAvailableError otherwise until partitions are created
+        print "TOPIC TO LOAD: %s" %(topic,)
         self.load_metadata_for_topics(topic)
 
         # If the partition doesn't actually exist, raise
@@ -117,6 +118,7 @@ class SimpleClient(object):
 
         # If there's no leader for the partition, raise
         leader = self.topic_partitions[topic][partition]
+        print "TOPIC:%s, PARTITION:%s, LEADERS:%s" % (topic, partition, leader)
         if leader == -1:
             raise LeaderNotAvailableError((topic, partition))
 
@@ -189,11 +191,12 @@ class SimpleClient(object):
     def _payloads_by_broker(self, payloads):
         payloads_by_broker = collections.defaultdict(list)
         for payload in payloads:
-            try:
-                leader = self._get_leader_for_partition(payload.topic, payload.partition)
-            except (KafkaUnavailableError, LeaderNotAvailableError,
-                    UnknownTopicOrPartitionError):
-                leader = None
+#            try:
+#                leader = self._get_leader_for_partition(payload.topic, payload.partition)
+            leader = self._get_leader_for_partition(payload.topic, payload.partition)
+#            except (KafkaUnavailableError, LeaderNotAvailableError,
+#                    UnknownTopicOrPartitionError):
+#                leader = None
             payloads_by_broker[leader].append(payload)
         return dict(payloads_by_broker)
 
@@ -224,6 +227,7 @@ class SimpleClient(object):
         # encoders / decoders do not maintain ordering currently
         # so we need to keep this so we can rebuild order before returning
         original_ordering = [(p.topic, p.partition) for p in payloads]
+        print "ORIGINAL_ORDERING:%s" % (original_ordering,)
 
         # Connection errors generally mean stale metadata
         # although sometimes it means incorrect api request
@@ -234,6 +238,7 @@ class SimpleClient(object):
         # For each broker, send the list of request payloads
         # and collect the responses and errors
         payloads_by_broker = self._payloads_by_broker(payloads)
+        print "PAYLOADS BY BROKER:%s" % (payloads_by_broker,)
         responses = {}
 
         def failed_payloads(payloads):
@@ -245,6 +250,7 @@ class SimpleClient(object):
         # a select to perform unblocking I/O
         connections_by_future = {}
         for broker, broker_payloads in six.iteritems(payloads_by_broker):
+            print "BROKER:%s, BPAY:%s" % (broker, broker_payloads)
             if broker is None:
                 failed_payloads(broker_payloads)
                 continue
@@ -522,6 +528,7 @@ class SimpleClient(object):
                 when the broker is configured to auto-create topics. Retry
                 after a short backoff (topics/partitions are initializing).
         """
+        print "TOPICS WILL BE LOADED:%s (%s)" % (topics, kwargs)
         if 'ignore_leadernotavailable' in kwargs:
             ignore_leadernotavailable = kwargs['ignore_leadernotavailable']
         else:
@@ -533,6 +540,7 @@ class SimpleClient(object):
             self.reset_all_metadata()
 
         resp = self.send_metadata_request(topics)
+        print "LOAD_META:%s" % (resp,)
 
         log.debug('Updating broker metadata: %s', resp.brokers)
         log.debug('Updating topic metadata: %s', [topic for _, topic, _ in resp.topics])
@@ -650,7 +658,11 @@ class SimpleClient(object):
         else:
             decoder = KafkaProtocol.decode_produce_response
 
+        print "PAY:%s" % (payloads,)
+        print "ENC:%s" % (encoder,)
+        print "DEC:%s" % (decoder,)
         resps = self._send_broker_aware_request(payloads, encoder, decoder)
+        print "RES:%s" % (resps,)
 
         return [resp if not callback else callback(resp) for resp in resps
                 if resp is not None and

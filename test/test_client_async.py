@@ -393,12 +393,34 @@ def test_maybe_refresh_metadata_cant_send(mocker, client):
     assert not client._metadata_refresh_in_progress
 
 
-def test_schedule():
-    pass
+def test_schedule(mocker, client):
+    task_delay_secs = 2
+    tolerance_secs = 4
+    sleep_secs = 0.5
+    task_result = 'task_succeeded'
+    def task():
+        return task_result
+    start_time = time.time()
+    future = client.schedule(task, start_time + task_delay_secs)
+    while not future.is_done:
+        time.sleep(sleep_secs)
+        client.poll(timeout_ms=100, delayed_tasks=True)
+        assert time.time() < start_time + tolerance_secs
+    elapsed_time = time.time() - start_time
+    assert elapsed_time > task_delay_secs
+    assert future.is_done
+    assert future.value == task_result
+    assert future.exception is None
 
 
-def test_unschedule():
-    pass
+def test_unschedule(mocker, client):
+    def task():
+        return 'anything'
+    future = client.schedule(task, time.time() + 1)
+    client.unschedule(task)
+    assert future.is_done
+    assert future.value == None
+    assert isinstance(future.exception, Errors.Cancelled)
 
 
 def test_idle_connection_manager(mocker):

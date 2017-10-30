@@ -8,13 +8,13 @@ from kafka.structs import (
     ProduceRequestPayload)
 
 from test.fixtures import ZookeeperFixture, KafkaFixture
-from test.testutil import KafkaIntegrationTestCase, kafka_versions
+from test.testutil import KafkaIntegrationTestCase, kafka_versions, kafka_version
 
 
 class TestKafkaClientIntegration(KafkaIntegrationTestCase):
     @classmethod
     def setUpClass(cls):  # noqa
-        if not os.environ.get('KAFKA_VERSION'):
+        if not kafka_version():
             return
 
         cls.zk = ZookeeperFixture.instance()
@@ -22,7 +22,7 @@ class TestKafkaClientIntegration(KafkaIntegrationTestCase):
 
     @classmethod
     def tearDownClass(cls):  # noqa
-        if not os.environ.get('KAFKA_VERSION'):
+        if not kafka_version():
             return
 
         cls.server.close()
@@ -99,7 +99,7 @@ class TestKafkaClientIntegration(KafkaIntegrationTestCase):
     #########################
 
     @kafka_versions('>=0.8.1')
-    def test_create_delete_topics(self):
+    def test_create_delete_filter_topics(self):
         try:
             self.ensure_topics(['topic1', 'topic2', 'topic3'])
             self.kafka_client.poll(future=self.kafka_client.set_topics(['topic1','topic2']))
@@ -112,3 +112,17 @@ class TestKafkaClientIntegration(KafkaIntegrationTestCase):
             assert set(['topic1', 'topic2', 'topic3']) == set(self.get_topics())
         finally: 
             self.delete_topics(['topic1', 'topic2', 'topic3'])
+
+
+    @kafka_versions('>=0.8.1')
+    def test_check_version(self):
+        inferred_version = self.kafka_client.check_version()
+        actual_version = tuple(map(lambda x: int(x), kafka_version().split('.')))
+        min_len = min(len(inferred_version), len(actual_version))
+        assert inferred_version[:min_len] == actual_version[:min_len]
+
+    @kafka_versions('>=0.8.1')
+    def test_connected(self):
+        node_id = self.kafka_client.least_loaded_node()
+        assert self.kafka_client.connected(node_id)
+

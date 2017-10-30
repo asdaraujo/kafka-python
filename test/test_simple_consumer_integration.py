@@ -21,11 +21,11 @@ from kafka.structs import (
 
 from test.fixtures import ZookeeperFixture, KafkaFixture
 from test.testutil import (
-    KafkaIntegrationSimpleApiTestCase, kafka_versions, random_string, Timer
+    KafkaIntegrationTestCase, kafka_versions, random_string, Timer
 )
 
 
-class TestConsumerIntegration(KafkaIntegrationSimpleApiTestCase):
+class TestConsumerIntegration(KafkaIntegrationTestCase):
     maxDiff = None
 
     @classmethod
@@ -54,9 +54,7 @@ class TestConsumerIntegration(KafkaIntegrationSimpleApiTestCase):
     def send_messages(self, partition, messages):
         messages = [ create_message(self.msg(str(msg))) for msg in messages ]
         produce = ProduceRequestPayload(self.topic, partition, messages = messages)
-        print "REQ:%s" % (produce,)
         resp, = self.client.send_produce_request([produce])
-        print "RES:%s" % (resp,)
         self.assertEqual(resp.error, 0)
 
         return [ x.value for x in messages ]
@@ -92,18 +90,18 @@ class TestConsumerIntegration(KafkaIntegrationSimpleApiTestCase):
 
         return consumer_class(self.client, group, topic, **kwargs)
 
-#    def kafka_consumer(self, **configs):
-#        brokers = '%s:%d' % (self.server.host, self.server.port)
-#        consumer = KafkaConsumer(self.topic,
-#                                 bootstrap_servers=brokers,
-#                                 **configs)
-#        return consumer
+    def kafka_consumer(self, **configs):
+        brokers = '%s:%d' % (self.server.host, self.server.port)
+        consumer = KafkaConsumer(self.topic,
+                                 bootstrap_servers=brokers,
+                                 **configs)
+        return consumer
 
-#    def kafka_producer(self, **configs):
-#        brokers = '%s:%d' % (self.server.host, self.server.port)
-#        producer = KafkaProducer(
-#            bootstrap_servers=brokers, **configs)
-#        return producer
+    def kafka_producer(self, **configs):
+        brokers = '%s:%d' % (self.server.host, self.server.port)
+        producer = KafkaProducer(
+            bootstrap_servers=brokers, **configs)
+        return producer
 
     def test_simple_consumer(self):
         self.send_messages(0, range(0, 100))
