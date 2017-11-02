@@ -5,6 +5,7 @@ import logging
 import os
 import os.path
 import shutil
+import socket
 import subprocess
 import tempfile
 import time
@@ -14,11 +15,16 @@ from six.moves import urllib
 from six.moves.urllib.parse import urlparse  # pylint: disable=E0611,F0401
 
 from test.service import ExternalService, SpawnedService
-from test.testutil import get_open_port
 
 
 log = logging.getLogger(__name__)
 
+def get_open_port():
+    sock = socket.socket()
+    sock.bind(("", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    return port
 
 class Fixture(object):
     kafka_version = os.environ.get('KAFKA_VERSION', '0.11.0.1')
@@ -173,7 +179,7 @@ class ZookeeperFixture(Fixture):
         self.child.stop()
         self.child = None
         self.out("Done!")
-        shutil.rmtree(self.tmp_dir)
+        #shutil.rmtree(self.tmp_dir)
 
     def __del__(self):
         self.close()
@@ -333,5 +339,5 @@ class KafkaFixture(Fixture):
         self.child.stop()
         self.child = None
         self.out("Done!")
-        shutil.rmtree(self.tmp_dir)
+        #shutil.rmtree(self.tmp_dir)
         self.running = False

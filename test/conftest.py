@@ -6,29 +6,30 @@ import pytest
 
 from test.fixtures import KafkaFixture, ZookeeperFixture
 
+def version_str_to_list(s):
+    return tuple(map(int, s.split('.'))) # e.g., [0, 8, 1, 1]
 
 @pytest.fixture(scope="module")
 def version():
     if 'KAFKA_VERSION' not in os.environ:
         return ()
-    return tuple(map(int, os.environ['KAFKA_VERSION'].split('.')))
+    return version_str_to_list(os.environ['KAFKA_VERSION'])
 
-
-@pytest.fixture(scope="module")
-def zookeeper(version, request):
-    assert version
-    zk = ZookeeperFixture.instance()
-    yield zk
-    zk.close()
-
-
-@pytest.fixture(scope="module")
-def kafka_broker(version, zookeeper, request):
-    assert version
-    k = KafkaFixture.instance(0, zookeeper.host, zookeeper.port,
-                              partitions=4)
-    yield k
-    k.close()
+#@pytest.fixture(scope="module")
+#def zookeeper(version, request):
+#    assert version
+#    zk = ZookeeperFixture.instance()
+#    yield zk
+#    zk.close()
+#
+#
+#@pytest.fixture(scope="module")
+#def kafka_broker(version, zookeeper, request):
+#    assert version
+#    k = KafkaFixture.instance(0, zookeeper.host, zookeeper.port,
+#                              partitions=4)
+#    yield k
+#    k.close()
 
 
 @pytest.fixture

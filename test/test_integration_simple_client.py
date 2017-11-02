@@ -6,26 +6,10 @@ from kafka.structs import (
     FetchRequestPayload, OffsetCommitRequestPayload, OffsetFetchRequestPayload,
     ProduceRequestPayload)
 
-from test.fixtures import ZookeeperFixture, KafkaFixture
-from test.testutil import KafkaIntegrationTestCase, kafka_versions
+from test.testutil import KafkaIntegrationSimpleApiTestCase, kafka_versions
 
-
-class TestKafkaClientIntegration(KafkaIntegrationTestCase):
-    @classmethod
-    def setUpClass(cls):  # noqa
-        if not os.environ.get('KAFKA_VERSION'):
-            return
-
-        cls.zk = ZookeeperFixture.instance()
-        cls.server = KafkaFixture.instance(0, cls.zk.host, cls.zk.port)
-
-    @classmethod
-    def tearDownClass(cls):  # noqa
-        if not os.environ.get('KAFKA_VERSION'):
-            return
-
-        cls.server.close()
-        cls.zk.close()
+class TestKafkaClientIntegration(KafkaIntegrationSimpleApiTestCase):
+    num_partitions=2
 
     def test_consume_none(self):
         fetch = FetchRequestPayload(self.topic, 0, 0, 1024)

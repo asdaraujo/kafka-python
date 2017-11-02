@@ -3,22 +3,28 @@ import logging
 import operator
 import os
 import random
-import socket
 import string
 import time
 import uuid
+import pytest
 
 from six.moves import xrange
 from . import unittest
+from test.fixtures import KafkaFixture, ZookeeperFixture
+from test.conftest import version, version_str_to_list
 
 from kafka import SimpleClient
+from kafka import errors
+from kafka.client_async import KafkaClient
+from kafka.consumer import KafkaConsumer
+from kafka.producer import KafkaProducer
 from kafka.structs import OffsetRequestPayload
+from kafka.protocol.admin import CreateTopicsRequest, DeleteTopicsRequest
 
 __all__ = [
     'random_string',
-    'get_open_port',
     'kafka_versions',
-    'KafkaIntegrationTestCase',
+    'KafkaIntegrationSimpleApiTestCase',
     'Timer',
 ]
 
@@ -26,9 +32,6 @@ def random_string(l):
     return "".join(random.choice(string.ascii_letters) for i in xrange(l))
 
 def kafka_versions(*versions):
-
-    def version_str_to_list(s):
-        return list(map(int, s.split('.'))) # e.g., [0, 8, 1, 1]
 
     def construct_lambda(s):
         if s[0].isdigit():
@@ -53,14 +56,14 @@ def kafka_versions(*versions):
         }
         op = op_map[op_str]
         version = version_str_to_list(v_str)
-        return lambda a: op(version_str_to_list(a), version)
+        return lambda a: op(a, version)
 
     validators = map(construct_lambda, versions)
 
     def kafka_versions(func):
         @functools.wraps(func)
         def wrapper(self):
-            kafka_version = os.environ.get('KAFKA_VERSION')
+            kafka_version = version()
 
             if not kafka_version:
                 self.skipTest("no kafka version set in KAFKA_VERSION env var")
@@ -73,53 +76,54 @@ def kafka_versions(*versions):
         return wrapper
     return kafka_versions
 
-def get_open_port():
-    sock = socket.socket()
-    sock.bind(("", 0))
-    port = sock.getsockname()[1]
-    sock.close()
-    return port
-
-class KafkaIntegrationTestCase(unittest.TestCase):
-    create_client = True
-    topic = None
+@pytest.mark.skipif(not version(), reason='Integration test requires KAFKA_VERSION')
+class KafkaIntegrationBaseTestCase(unittest.TestCase):
     zk = None
     server = None
+    num_brokers = 1
+    num_partitions = 1
+    topic = None
+
+    @classmethod
+    def setUpClass(cls):
+        cls.zk = ZookeeperFixture.instance()
+        cls.zk_chroot = random_string(10)
+        cls.servers = []
+        for i in range(cls.num_brokers):
+            cls.servers.append(cls.get_broker(i, cls.num_partitions))
+    
+        if cls.num_brokers > 0:
+            cls.server = cls.servers[0] # Bootstrapping server
+        
+    @classmethod
+    def tearDownClass(cls):
+        for i in range(cls.num_brokers):
+            cls.servers[i].close()
+        cls.zk.close()
+        pass
+
+    @classmethod
+    def get_broker(cls, inst_id, num_partitions):
+        return KafkaFixture.instance(inst_id,
+                                     cls.zk.host, cls.zk.port,
+                                     zk_chroot=cls.zk_chroot,
+                                     partitions=num_partitions)
 
     def setUp(self):
-        super(KafkaIntegrationTestCase, self).setUp()
-        if not os.environ.get('KAFKA_VERSION'):
-            self.skipTest('Integration test requires KAFKA_VERSION')
-
+        super(KafkaIntegrationBaseTestCase, self).setUp()
         if not self.topic:
-            topic = "%s-%s" % (self.id()[self.id().rindex(".") + 1:], random_string(10))
-            self.topic = topic
-
-        if self.create_client:
-            self.client = SimpleClient('%s:%d' % (self.server.host, self.server.port))
-
-        self.client.ensure_topic_exists(self.topic)
+            self.topic = "%s-%s" % (self.id()[self.id().rindex(".") + 1:], random_string(10))
 
         self._messages = {}
 
     def tearDown(self):
-        super(KafkaIntegrationTestCase, self).tearDown()
-        if not os.environ.get('KAFKA_VERSION'):
-            return
+        super(KafkaIntegrationBaseTestCase, self).tearDown()
 
-        if self.create_client:
+        if self.client and self.create_client:
             self.client.close()
 
-    def current_offset(self, topic, partition):
-        try:
-            offsets, = self.client.send_offset_request([OffsetRequestPayload(topic, partition, -1, 1)])
-        except:
-            # XXX: We've seen some UnknownErrors here and can't debug w/o server logs
-            self.zk.child.dump_logs()
-            self.server.child.dump_logs()
-            raise
-        else:
-            return offsets.offsets[0]
+    def bootstrap_server(self):
+        return '%s:%d' % (self.server.host, self.server.port)
 
     def msgs(self, iterable):
         return [ self.msg(x) for x in iterable ]
@@ -132,6 +136,147 @@ class KafkaIntegrationTestCase(unittest.TestCase):
 
     def key(self, k):
         return k.encode('utf-8')
+
+
+class KafkaIntegrationSimpleApiTestCase(KafkaIntegrationBaseTestCase):
+    create_client = True
+
+    def setUp(self):
+        super(KafkaIntegrationSimpleApiTestCase, self).setUp()
+
+        if self.server and self.create_client:
+            self.client = SimpleClient(self.bootstrap_server())
+        
+        self.client.ensure_topic_exists(self.topic)
+
+    def tearDown(self):
+        if self.create_client:
+            self.client.close()
+
+        super(KafkaIntegrationSimpleApiTestCase, self).tearDown()
+
+    def current_offset(self, topic, partition):
+        try:
+            offsets, = self.client.send_offset_request([OffsetRequestPayload(topic, partition, -1, 1)])
+        except:
+            # XXX: We've seen some UnknownErrors here and can't debug w/o server logs
+            self.zk.child.dump_logs()
+            self.server.child.dump_logs()
+            raise
+        else:
+            return offsets.offsets[0]
+
+
+class KafkaIntegrationStandardTestCase(KafkaIntegrationBaseTestCase):
+    create_client = True
+    client = None
+
+    def setUp(self):
+        super(KafkaIntegrationStandardTestCase, self).setUp()
+
+        if self.server and self.create_client:
+            self.client = KafkaClient(client_id='default_client',
+                                      bootstrap_servers=self.bootstrap_server())
+
+        if self.client:
+            self.ensure_topics([self.topic])
+
+    def tearDown(self):
+        #self.delete_topics([self.topic])
+
+        if self.create_client and self.client:
+            self.client.close()
+
+        super(KafkaIntegrationStandardTestCase, self).tearDown()
+
+    def _send_request(self, request, timeout=None, success=None, failure=None):
+        def _success(m):
+            pass
+        def _failure(e):
+            raise e
+        retries = 3
+        while True:
+            try:
+                if self.client.cluster.controller is None:
+                    self.update_metadata()
+                    assert self.client.cluster.controller is not None
+                controller_id = self.client.cluster.controller.nodeId
+                future = self.client.send(controller_id, request)
+                future.error_on_callbacks = True
+                future.add_callback(_success if success is None else success)
+                future.add_errback(_failure if failure is None else failure)
+                return self.client.poll(future=future, timeout_ms=timeout)
+            except errors.NodeNotReadyError as e:
+                retries -= 1
+                if retries == 0:
+                    raise e
+                else:
+                    pass # retry
+
+    def create_topics(self, topic_names, timeout=30000, num_partitions=None, replication_factor=1):
+        if num_partitions is None:
+            num_partitions = self.num_partitions
+        topics = map(lambda t: (t, num_partitions, replication_factor, [], []), topic_names)
+        request = CreateTopicsRequest[0](topics, timeout)
+        result = self._send_request(request, timeout=timeout)
+        for topic_result in result[0].topic_error_codes:
+            error_code = topic_result[1]
+            if error_code != 0:
+                raise errors.for_code(error_code)
+        return result
+
+    def ensure_topics(self, topic_names, timeout=30000, num_partitions=None, replication_factor=1):
+        try:
+            self.create_topics(topic_names, timeout, num_partitions, replication_factor)
+        except errors.TopicAlreadyExistsError:
+            pass
+        assert set(topic_names) == set(topic_names).intersection(set(self.get_topics()))
+
+    def delete_topics(self, topic_names, timeout=30000):
+        request = DeleteTopicsRequest[0](topic_names, timeout)
+        result = self._send_request(request, timeout=timeout)
+        for topic_result in result[0].topic_error_codes:
+            error_code = topic_result[1]
+            if error_code != 0:
+                raise errors.for_code(error_code)
+        return result
+
+    def update_metadata(self):
+        metadata = self.client.poll(future=self.client.cluster.request_update())
+
+    def get_topics(self):
+        self.update_metadata()
+        return self.client.cluster.topics()
+
+    def get_consumers(self, cnt=1, topics=None, group_id=None, heartbeat_interval_ms=500):
+        if topics is None:
+            topics = [self.topic]
+        if not group_id:
+            group_id = random_string(10)
+        params = {
+            'bootstrap_servers': self.bootstrap_server(),
+            'group_id': group_id,
+            'heartbeat_interval_ms': heartbeat_interval_ms,
+        }
+        return tuple(KafkaConsumer(*topics,
+                                   client_id='consumer_%d' % (x,),
+                                   bootstrap_servers=self.bootstrap_server(),
+                                   group_id=group_id,
+                                   heartbeat_interval_ms=heartbeat_interval_ms) for x in range(cnt))
+
+    def get_producers(self, cnt=1):
+        return tuple(KafkaProducer(bootstrap_servers=self.bootstrap_server()) for x in range(cnt))
+
+#    def current_offset(self, topic, partition):
+#        try:
+#            offsets, = self.client.send_offset_request([OffsetRequestPayload(topic, partition, -1, 1)])
+#        except:
+#            # XXX: We've seen some UnknownErrors here and can't debug w/o server logs
+#            self.zk.child.dump_logs()
+#            self.server.child.dump_logs()
+#            raise
+#        else:
+#            return offsets.offsets[0]
 
 
 class Timer(object):

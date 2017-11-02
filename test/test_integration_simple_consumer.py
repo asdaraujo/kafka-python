@@ -19,37 +19,15 @@ from kafka.structs import (
     ProduceRequestPayload, TopicPartition, OffsetAndTimestamp
 )
 
-from test.fixtures import ZookeeperFixture, KafkaFixture
 from test.testutil import (
-    KafkaIntegrationTestCase, kafka_versions, random_string, Timer
+    KafkaIntegrationSimpleApiTestCase, kafka_versions, random_string, Timer
 )
 
 
-class TestConsumerIntegration(KafkaIntegrationTestCase):
+class TestConsumerIntegration(KafkaIntegrationSimpleApiTestCase):
     maxDiff = None
-
-    @classmethod
-    def setUpClass(cls):
-        if not os.environ.get('KAFKA_VERSION'):
-            return
-
-        cls.zk = ZookeeperFixture.instance()
-        chroot = random_string(10)
-        cls.server1 = KafkaFixture.instance(0, cls.zk.host, cls.zk.port,
-                                            zk_chroot=chroot)
-        cls.server2 = KafkaFixture.instance(1, cls.zk.host, cls.zk.port,
-                                            zk_chroot=chroot)
-
-        cls.server = cls.server1 # Bootstrapping server
-
-    @classmethod
-    def tearDownClass(cls):
-        if not os.environ.get('KAFKA_VERSION'):
-            return
-
-        cls.server1.close()
-        cls.server2.close()
-        cls.zk.close()
+    num_brokers = 2
+    num_partitions = 2
 
     def send_messages(self, partition, messages):
         messages = [ create_message(self.msg(str(msg))) for msg in messages ]

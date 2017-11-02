@@ -10,19 +10,16 @@ from kafka.producer.base import Producer
 from kafka.structs import TopicPartition
 
 from test.fixtures import ZookeeperFixture, KafkaFixture
-from test.testutil import KafkaIntegrationTestCase, random_string
+from test.testutil import KafkaIntegrationSimpleApiTestCase, random_string
 
 
 log = logging.getLogger(__name__)
 
 
-class TestFailover(KafkaIntegrationTestCase):
+class TestFailover(KafkaIntegrationSimpleApiTestCase):
     create_client = False
 
     def setUp(self):
-        if not os.environ.get('KAFKA_VERSION'):
-            self.skipTest('integration test requires KAFKA_VERSION')
-
         zk_chroot = random_string(10)
         replicas = 3
         partitions = 3
@@ -41,9 +38,6 @@ class TestFailover(KafkaIntegrationTestCase):
 
     def tearDown(self):
         super(TestFailover, self).tearDown()
-        if not os.environ.get('KAFKA_VERSION'):
-            return
-
         self.client.close()
         for broker in self.brokers:
             broker.close()
