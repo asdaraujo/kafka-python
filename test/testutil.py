@@ -180,6 +180,14 @@ class KafkaIntegrationStandardTestCase(KafkaIntegrationBaseTestCase):
     def setUp(self):
         super(KafkaIntegrationStandardTestCase, self).setUp()
 
+        if is_kerberos_enabled():
+            # check for client keytab
+            if 'KRB5_CLIENT_KTNAME' not in os.environ:
+                raise RuntimeException('KRB5_CLIENT_KTNAME is not set')
+            # set a randomly named credential cache
+            self.krb5ccname = '/tmp/kafka_' + random_string(10)
+            os.environ['KRB5CCNAME'] = self.krb5ccname
+
         if self.server and self.create_client:
             self.client = KafkaClient(client_id='default_client',
                                       bootstrap_servers=self.bootstrap_server(),
@@ -194,6 +202,9 @@ class KafkaIntegrationStandardTestCase(KafkaIntegrationBaseTestCase):
 
         if self.create_client and self.client:
             self.client.close()
+
+        if is_kerberos_enabled():
+            os.remove(self.krb5ccname)
 
         super(KafkaIntegrationStandardTestCase, self).tearDown()
 

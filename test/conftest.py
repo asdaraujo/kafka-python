@@ -15,23 +15,6 @@ def version():
         return ()
     return version_str_to_list(os.environ['KAFKA_VERSION'])
 
-#@pytest.fixture(scope="module")
-#def zookeeper(version, request):
-#    assert version
-#    zk = ZookeeperFixture.instance()
-#    yield zk
-#    zk.close()
-#
-#
-#@pytest.fixture(scope="module")
-#def kafka_broker(version, zookeeper, request):
-#    assert version
-#    k = KafkaFixture.instance(0, zookeeper.host, zookeeper.port,
-#                              partitions=4)
-#    yield k
-#    k.close()
-
-
 @pytest.fixture
 def conn(mocker):
     from kafka.conn import ConnectionStates

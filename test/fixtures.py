@@ -27,10 +27,18 @@ def get_open_port():
     return port
 
 def kerberos_realm():
-    return os.environ['KERBEROS_REALM'] if 'KERBEROS_REALM' in os.environ else None
+    if 'KERBEROS_REALM' in os.environ:
+        return os.environ['KERBEROS_REALM']
+    else:
+        return None
 
 def kafka_keytab():
-    return os.environ['KAFKA_KEYTAB'] if 'KAFKA_KEYTAB' in os.environ else None
+    if 'KAFKA_KEYTAB' in os.environ:
+        # if keytab var is set, copy its value for the client keytab var for client to authenticate
+        os.environ['KRB5_CLIENT_KTNAME'] = os.environ['KAFKA_KEYTAB']
+        return os.environ['KAFKA_KEYTAB']
+    else:
+        return None
 
 def is_kerberos_enabled():
     if kerberos_realm() is None and kafka_keytab() is not None or \
