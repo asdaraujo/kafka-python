@@ -10,7 +10,7 @@ import pytest
 
 from six.moves import xrange
 from . import unittest
-from test.fixtures import KafkaFixture, ZookeeperFixture
+from test.fixtures import KafkaFixture, ZookeeperFixture, is_kerberos_enabled
 from test.conftest import version, version_str_to_list
 
 from kafka import SimpleClient
@@ -110,7 +110,9 @@ class KafkaIntegrationBaseTestCase(unittest.TestCase):
                                      cls.zk.host, cls.zk.port,
                                      zk_chroot=cls.zk_chroot,
                                      partitions=num_partitions,
-                                     auto_create_topic=auto_create_topic)
+                                     auto_create_topic=auto_create_topic,
+                                     transport='SASL_PLAINTEXT' if is_kerberos_enabled() else 'PLAINTEXT',
+                                     sasl_mechanism='GSSAPI' if is_kerberos_enabled() else 'PLAIN')
 
     def setUp(self):
         super(KafkaIntegrationBaseTestCase, self).setUp()
@@ -180,7 +182,9 @@ class KafkaIntegrationStandardTestCase(KafkaIntegrationBaseTestCase):
 
         if self.server and self.create_client:
             self.client = KafkaClient(client_id='default_client',
-                                      bootstrap_servers=self.bootstrap_server())
+                                      bootstrap_servers=self.bootstrap_server(),
+                                      transport='SASL_PLAINTEXT' if is_kerberos_enabled() else 'PLAINTEXT',
+                                      sasl_mechanism='GSSAPI' if is_kerberos_enabled() else 'PLAIN')
 
         if self.client:
             self.ensure_topics([self.topic])

@@ -26,6 +26,21 @@ def get_open_port():
     sock.close()
     return port
 
+def kerberos_realm():
+    return os.environ['KERBEROS_REALM'] if 'KERBEROS_REALM' in os.environ else None
+
+def kafka_keytab():
+    return os.environ['KAFKA_KEYTAB'] if 'KAFKA_KEYTAB' in os.environ else None
+
+def is_kerberos_enabled():
+    if kerberos_realm() is None and kafka_keytab() is not None or \
+       kerberos_realm() is not None and kafka_keytab() is None:
+        raise RuntimeError("KERBEROS_REALM and KAFKA_KEYTAB must be either both set or both unset")
+    elif kerberos_realm() is None:
+       return False
+    else:
+       return True
+
 class Fixture(object):
     kafka_version = os.environ.get('KAFKA_VERSION', '0.11.0.1')
     scala_version = os.environ.get("SCALA_VERSION", '2.8.0')
@@ -214,7 +229,8 @@ class KafkaFixture(Fixture):
             # Note that even though we specify the bind host in bracket notation, Kafka responds to the bootstrap
             # metadata request without square brackets later.
             if host is None:
-                host = "[::1]"
+#                host = "[::1]"
+                host = "localhost"
             fixture = KafkaFixture(host, port, broker_id,
                                    zk_host, zk_port, zk_chroot,
                                    transport=transport,
@@ -254,9 +270,14 @@ class KafkaFixture(Fixture):
         self.child = None
         self.running = False
 
+        self.kerberos_realm = kerberos_realm()
+        self.kafka_keytab = kafka_keytab()
+
     def kafka_run_class_env(self):
         env = super(KafkaFixture, self).kafka_run_class_env()
         env['LOG_DIR'] = os.path.join(self.tmp_dir, 'logs')
+        if is_kerberos_enabled():
+            env['KAFKA_OPTS'] = "-Djava.security.auth.login.config=%s" % os.path.join(self.tmp_dir, "jaas.conf")
         return env
 
     def out(self, message):
@@ -303,6 +324,9 @@ class KafkaFixture(Fixture):
         # Configure Kafka child process
         properties = os.path.join(self.tmp_dir, "kafka.properties")
         template = self.test_resource("kafka.properties")
+        if is_kerberos_enabled():
+            jaas_template = self.test_resource("jaas.conf")
+            self.render_template(jaas_template, os.path.join(self.tmp_dir, "jaas.conf"), vars(self))
         args = self.kafka_run_class_args("kafka.Kafka", properties)
         env = self.kafka_run_class_env()
 
