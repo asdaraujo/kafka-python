@@ -204,7 +204,7 @@ class KafkaFixture(Fixture):
     @classmethod
     def instance(cls, broker_id, zk_host, zk_port, zk_chroot=None,
                  host=None, port=None,
-                 transport='PLAINTEXT', replicas=1, partitions=2,
+                 security_protocol='PLAINTEXT', replicas=1, partitions=2,
                  sasl_mechanism='PLAIN', auto_create_topic=True):
 
         if zk_chroot is None:
@@ -233,7 +233,7 @@ class KafkaFixture(Fixture):
                 host = "localhost"
             fixture = KafkaFixture(host, port, broker_id,
                                    zk_host, zk_port, zk_chroot,
-                                   transport=transport,
+                                   security_protocol=security_protocol,
                                    replicas=replicas, partitions=partitions,
                                    sasl_mechanism=sasl_mechanism,
                                    auto_create_topic=auto_create_topic)
@@ -242,7 +242,7 @@ class KafkaFixture(Fixture):
         return fixture
 
     def __init__(self, host, port, broker_id, zk_host, zk_port, zk_chroot,
-                 replicas=1, partitions=2, transport='PLAINTEXT',
+                 replicas=1, partitions=2, security_protocol='PLAINTEXT',
                  sasl_mechanism='PLAIN', auto_create_topic=True):
 
         self.host = host
@@ -250,7 +250,7 @@ class KafkaFixture(Fixture):
 
         self.broker_id = broker_id
         self.auto_create_topic = auto_create_topic
-        self.transport = transport.upper()
+        self.security_protocol = security_protocol.upper()
         self.sasl_mechanism = sasl_mechanism.upper()
         self.ssl_dir = self.test_resource('ssl')
 
@@ -290,16 +290,16 @@ class KafkaFixture(Fixture):
 
         self.tmp_dir = tempfile.mkdtemp()
         self.out("Running local instance...")
-        log.info("  host       = %s", self.host)
-        log.info("  port       = %s", self.port or '(auto)')
-        log.info("  transport  = %s", self.transport)
-        log.info("  broker_id  = %s", self.broker_id)
-        log.info("  zk_host    = %s", self.zk_host)
-        log.info("  zk_port    = %s", self.zk_port)
-        log.info("  zk_chroot  = %s", self.zk_chroot)
-        log.info("  replicas   = %s", self.replicas)
-        log.info("  partitions = %s", self.partitions)
-        log.info("  tmp_dir    = %s", self.tmp_dir)
+        log.info("  host               = %s", self.host)
+        log.info("  port               = %s", self.port or '(auto)')
+        log.info("  security_protocol  = %s", self.security_protocol)
+        log.info("  broker_id          = %s", self.broker_id)
+        log.info("  zk_host            = %s", self.zk_host)
+        log.info("  zk_port            = %s", self.zk_port)
+        log.info("  zk_chroot          = %s", self.zk_chroot)
+        log.info("  replicas           = %s", self.replicas)
+        log.info("  partitions         = %s", self.partitions)
+        log.info("  tmp_dir            = %s", self.tmp_dir)
 
         # Create directories
         os.mkdir(os.path.join(self.tmp_dir, "logs"))

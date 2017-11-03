@@ -111,7 +111,7 @@ class KafkaIntegrationBaseTestCase(unittest.TestCase):
                                      zk_chroot=cls.zk_chroot,
                                      partitions=num_partitions,
                                      auto_create_topic=auto_create_topic,
-                                     transport='SASL_PLAINTEXT' if is_kerberos_enabled() else 'PLAINTEXT',
+                                     security_protocol='SASL_PLAINTEXT' if is_kerberos_enabled() else 'PLAINTEXT',
                                      sasl_mechanism='GSSAPI' if is_kerberos_enabled() else 'PLAIN')
 
     def setUp(self):
@@ -183,7 +183,7 @@ class KafkaIntegrationStandardTestCase(KafkaIntegrationBaseTestCase):
         if self.server and self.create_client:
             self.client = KafkaClient(client_id='default_client',
                                       bootstrap_servers=self.bootstrap_server(),
-                                      transport='SASL_PLAINTEXT' if is_kerberos_enabled() else 'PLAINTEXT',
+                                      security_protocol='SASL_PLAINTEXT' if is_kerberos_enabled() else 'PLAINTEXT',
                                       sasl_mechanism='GSSAPI' if is_kerberos_enabled() else 'PLAIN')
 
         if self.client:
