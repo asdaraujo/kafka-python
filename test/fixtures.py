@@ -189,7 +189,9 @@ class KafkaFixture(Fixture):
     @classmethod
     def instance(cls, broker_id, zk_host, zk_port, zk_chroot=None,
                  host=None, port=None,
-                 transport='PLAINTEXT', replicas=1, partitions=2):
+                 transport='PLAINTEXT', replicas=1, partitions=2,
+                 sasl_mechanism='PLAIN', auto_create_topic=True):
+
         if zk_chroot is None:
             zk_chroot = "kafka-python_" + str(uuid.uuid4()).replace("-", "_")
         if "KAFKA_URI" in os.environ:
@@ -216,17 +218,24 @@ class KafkaFixture(Fixture):
             fixture = KafkaFixture(host, port, broker_id,
                                    zk_host, zk_port, zk_chroot,
                                    transport=transport,
-                                   replicas=replicas, partitions=partitions)
+                                   replicas=replicas, partitions=partitions,
+                                   sasl_mechanism=sasl_mechanism,
+                                   auto_create_topic=auto_create_topic)
+
             fixture.open()
         return fixture
 
     def __init__(self, host, port, broker_id, zk_host, zk_port, zk_chroot,
-                 replicas=1, partitions=2, transport='PLAINTEXT'):
+                 replicas=1, partitions=2, transport='PLAINTEXT',
+                 sasl_mechanism='PLAIN', auto_create_topic=True):
+
         self.host = host
         self.port = port
 
         self.broker_id = broker_id
+        self.auto_create_topic = auto_create_topic
         self.transport = transport.upper()
+        self.sasl_mechanism = sasl_mechanism.upper()
         self.ssl_dir = self.test_resource('ssl')
 
         # TODO: checking for port connection would be better than scanning logs

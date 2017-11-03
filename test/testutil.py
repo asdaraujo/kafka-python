@@ -83,6 +83,7 @@ class KafkaIntegrationBaseTestCase(unittest.TestCase):
     num_brokers = 1
     num_partitions = 1
     topic = None
+    auto_create_topic = True
 
     @classmethod
     def setUpClass(cls):
@@ -90,7 +91,7 @@ class KafkaIntegrationBaseTestCase(unittest.TestCase):
         cls.zk_chroot = random_string(10)
         cls.servers = []
         for i in range(cls.num_brokers):
-            cls.servers.append(cls.get_broker(i, cls.num_partitions))
+            cls.servers.append(cls.get_broker(i, cls.num_partitions, cls.auto_create_topic))
     
         if cls.num_brokers > 0:
             cls.server = cls.servers[0] # Bootstrapping server
@@ -103,11 +104,12 @@ class KafkaIntegrationBaseTestCase(unittest.TestCase):
         pass
 
     @classmethod
-    def get_broker(cls, inst_id, num_partitions):
+    def get_broker(cls, inst_id, num_partitions, auto_create_topic):
         return KafkaFixture.instance(inst_id,
                                      cls.zk.host, cls.zk.port,
                                      zk_chroot=cls.zk_chroot,
-                                     partitions=num_partitions)
+                                     partitions=num_partitions,
+                                     auto_create_topic=auto_create_topic)
 
     def setUp(self):
         super(KafkaIntegrationBaseTestCase, self).setUp()
@@ -170,6 +172,7 @@ class KafkaIntegrationSimpleApiTestCase(KafkaIntegrationBaseTestCase):
 class KafkaIntegrationStandardTestCase(KafkaIntegrationBaseTestCase):
     create_client = True
     client = None
+    auto_create_topic = False
 
     def setUp(self):
         super(KafkaIntegrationStandardTestCase, self).setUp()
