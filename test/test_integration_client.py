@@ -12,26 +12,24 @@ from test.conftest import version
 class TestKafkaClientIntegration(KafkaIntegrationStandardTestCase):
     num_partitions=2
 
-
     #########################
     #   KafkaClient Tests   #
     #########################
 
     @kafka_versions('>=0.8.1')
     def test_create_delete_filter_topics(self):
-        try:
-            self.ensure_topics(['topic1', 'topic2', 'topic3'])
-            self.client.poll(future=self.client.set_topics(['topic1','topic2']))
-            assert set(['topic1', 'topic2']) == set(self.get_topics())
-            self.client.poll(future=self.client.add_topic('topic2'))
-            assert set(['topic1', 'topic2']) == set(self.get_topics())
-            self.client.poll(future=self.client.add_topic('topic4')) # non-existent topic
-            assert set(['topic1', 'topic2']) == set(self.get_topics())
-            self.client.poll(future=self.client.add_topic('topic3'))
+        self.ensure_topics(['topic1', 'topic2', 'topic3'])
+        self.client.poll(future=self.client.set_topics(['topic1','topic2']))
+        assert set(['topic1', 'topic2']) == set(self.get_topics())
+        self.client.poll(future=self.client.add_topic('topic2'))
+        assert set(['topic1', 'topic2']) == set(self.get_topics())
+        self.client.poll(future=self.client.add_topic('topic3'))
+        assert set(['topic1', 'topic2', 'topic3']) == set(self.get_topics())
+        self.client.poll(future=self.client.add_topic('topic4')) # non-existent topic
+        if self.auto_create_topic:
+            assert set(['topic1', 'topic2', 'topic3', 'topic4']) == set(self.get_topics())
+        else:
             assert set(['topic1', 'topic2', 'topic3']) == set(self.get_topics())
-        finally: 
-            self.delete_topics(['topic1', 'topic2', 'topic3'])
-
 
     @kafka_versions('>=0.8.1')
     def test_check_version(self):

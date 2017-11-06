@@ -20,6 +20,7 @@ from kafka.consumer import KafkaConsumer
 from kafka.producer import KafkaProducer
 from kafka.structs import OffsetRequestPayload
 from kafka.protocol.admin import CreateTopicsRequest, DeleteTopicsRequest
+from kafka.protocol.metadata import MetadataRequest
 
 __all__ = [
     'random_string',
@@ -172,7 +173,7 @@ class KafkaIntegrationSimpleApiTestCase(KafkaIntegrationBaseTestCase):
 class KafkaIntegrationStandardTestCase(KafkaIntegrationBaseTestCase):
     create_client = True
     client = None
-    auto_create_topic = False
+    auto_create_topic = version() < (0,10,1,0)
 
     def setUp(self):
         super(KafkaIntegrationStandardTestCase, self).setUp()
@@ -200,11 +201,8 @@ class KafkaIntegrationStandardTestCase(KafkaIntegrationBaseTestCase):
         retries = 3
         while True:
             try:
-                if self.client.cluster.controller is None:
-                    self.update_metadata()
-                    assert self.client.cluster.controller is not None
-                controller_id = self.client.cluster.controller.nodeId
-                future = self.client.send(controller_id, request)
+                node_id = self.client.least_loaded_node()
+                future = self.client.send(node_id, request)
                 future.error_on_callbacks = True
                 future.add_callback(_success if success is None else success)
                 future.add_errback(_failure if failure is None else failure)
@@ -217,22 +215,32 @@ class KafkaIntegrationStandardTestCase(KafkaIntegrationBaseTestCase):
                     pass # retry
 
     def create_topics(self, topic_names, timeout=30000, num_partitions=None, replication_factor=1):
-        if num_partitions is None:
-            num_partitions = self.num_partitions
-        topics = map(lambda t: (t, num_partitions, replication_factor, [], []), topic_names)
-        request = CreateTopicsRequest[0](topics, timeout)
-        result = self._send_request(request, timeout=timeout)
-        for topic_result in result[0].topic_error_codes:
-            error_code = topic_result[1]
-            if error_code != 0:
-                raise errors.for_code(error_code)
-        return result
+        if version() >= (0, 10, 1, 0):
+            if num_partitions is None:
+                num_partitions = self.num_partitions
+            topics = map(lambda t: (t, num_partitions, replication_factor, [], []), topic_names)
+            request = CreateTopicsRequest[0](topics, timeout)
+            result = self._send_request(request, timeout=timeout)
+            for topic_result in result[0].topic_error_codes:
+                error_code = topic_result[1]
+                if error_code != 0:
+                    raise errors.for_code(error_code)
+            return result
+        elif self.auto_create_topic:
+            self._send_request(MetadataRequest[0](topic_names))
+        else:
+            raise RuntimeError('CreateTopicRequest is not available in Kafka versions earlier than 0.10.1.0')
 
     def ensure_topics(self, topic_names, timeout=30000, num_partitions=None, replication_factor=1):
         try:
             self.create_topics(topic_names, timeout, num_partitions, replication_factor)
         except errors.TopicAlreadyExistsError:
             pass
+        retries = 100
+        while True:
+            if set(topic_names) == set(topic_names).intersection(set(self.get_topics())):
+                break
+            time.sleep(.1)
         assert set(topic_names) == set(topic_names).intersection(set(self.get_topics()))
 
     def delete_topics(self, topic_names, timeout=30000):
@@ -245,7 +253,7 @@ class KafkaIntegrationStandardTestCase(KafkaIntegrationBaseTestCase):
         return result
 
     def update_metadata(self):
-        metadata = self.client.poll(future=self.client.cluster.request_update())
+        return self.client.poll(future=self.client.cluster.request_update())
 
     def get_topics(self):
         self.update_metadata()
