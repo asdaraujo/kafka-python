@@ -14,7 +14,7 @@ def _pack(f, value):
 
 def _unpack(f, data, length=None):
     try:
-        if type(data) is not str:
+        if not isinstance(data, str):
             assert length is not None, 'length is required when unpacking from stream'
             data = data.read(length)
         assert length is None or length == len(data), \
