@@ -4,27 +4,252 @@ import atexit
 import logging
 import os
 import os.path
+import random
+import re
 import shutil
+import signal
+import socket
+import string
 import subprocess
 import tempfile
 import time
 import uuid
 
-from six.moves import urllib
+from six.moves import urllib, xrange
 from six.moves.urllib.parse import urlparse  # pylint: disable=E0611,F0401
+from subprocess import Popen, PIPE
 
 from test.service import ExternalService, SpawnedService
 from test.testutil import get_open_port
 
-
+logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
+def get_open_port():
+    sock = socket.socket()
+    sock.bind(('', 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    return port
+
+def random_string(l):
+    return ''.join(random.choice(string.ascii_letters) for i in xrange(l))
+
+def kerberos_realm():
+    if 'KERBEROS_REALM' in os.environ:
+        return os.environ['KERBEROS_REALM']
+    else:
+        return None
+
+def kafka_keytab():
+    if 'KAFKA_KEYTAB' in os.environ:
+        # if keytab var is set, copy its value for the client keytab var for client to authenticate
+        os.environ['KRB5_CLIENT_KTNAME'] = os.environ['KAFKA_KEYTAB']
+        return os.environ['KAFKA_KEYTAB']
+    else:
+        return None
+
+def is_kerberos_enabled():
+    if kerberos_realm() is None and kafka_keytab() is not None or \
+       kerberos_realm() is not None and kafka_keytab() is None:
+        raise RuntimeError('KERBEROS_REALM and KAFKA_KEYTAB must be either both set or both unset')
+    elif kerberos_realm() is None:
+       return False
+    else:
+       return True
 
 class Fixture(object):
+    project_root = os.environ.get('PROJECT_ROOT', os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+    @classmethod
+    def which(cls, program):
+        def is_exe(fpath):
+            return os.path.isfile(fpath) and os.access(fpath, os.X_OK)
+    
+        fpath, fname = os.path.split(program)
+        if fpath:
+            if is_exe(program):
+                return program
+        else:
+            for path in os.environ['PATH'].split(os.pathsep):
+                path = path.strip('"')
+                exe_file = os.path.join(path, program)
+                if is_exe(exe_file):
+                    return exe_file
+    
+        return None
+
+    @classmethod
+    def ensure_dir(self, file=None, dir=None):
+        if file and dir or file is None and dir is None:
+            raise RuntimeError('Exactly one of file or dir must be specified')
+        if file:
+            path = os.path.dirname(file)
+        else:
+            path = dir
+        try:
+            os.makedirs(path)
+        except FileExistsError as e:
+            pass
+
+    @classmethod
+    def render_template(cls, source_file, target_file, binding):
+        log.info('Rendering %s from template %s', target_file, source_file)
+        cls.ensure_dir(file=target_file)
+        with open(source_file, 'r') as handle:
+            template = handle.read()
+            assert len(template) > 0, 'Empty template %s' % source_file
+        with open(target_file, 'w') as handle:
+            handle.write(template.format(**binding))
+            handle.flush()
+            os.fsync(handle)
+
+        # fsync directory for durability
+        # https://blog.gocept.com/2013/07/15/reliable-file-updates-with-python/
+        dirfd = os.open(os.path.dirname(target_file), os.O_DIRECTORY)
+        os.fsync(dirfd)
+        os.close(dirfd)
+
+    @classmethod
+    def test_resource(cls, version, filename):
+        return os.path.join(cls.project_root, 'servers', version, 'resources', filename)
+
+    def out(self, message):
+        log.info('*** %s: %s', self, message)
+
+
+class KerberosFixture(Fixture):
+
+    def __init__(self):
+        self.realm = random_string(4).upper() + '.LOCAL'
+        self.udp_port = get_open_port()
+        self.tcp_port = get_open_port()
+
+        self.tmp_dir = None
+        self.database_name = None
+        self.kdc_db_password = 'password'
+
+    def _kdc_conf_path(self):
+        return os.path.join(self.tmp_dir, 'etc', 'krb5kdc', 'kdc.conf')
+
+    def _krb5_conf_path(self):
+        return os.path.join(self.tmp_dir, 'etc', 'krb5.conf')
+
+    def _server_keytab_path(self):
+        return os.path.join(self.tmp_dir, 'etc', 'krb5.keytab')
+
+    def _client_keytab_path(self):
+        return os.path.join(self.tmp_dir, 'etc', 'kafka.keytab')
+
+    def _pid_file(self):
+        return os.path.join(self.tmp_dir, 'var', 'run', 'krb5kdc.pid')
+
+    def _kerberos_env(self):
+        env = os.environ.copy()
+        env['KRB5_KDC_PROFILE'] = self._kdc_conf_path()
+        env['KRB5_CONFIG'] = self._krb5_conf_path()
+        env['KRB5_KTNAME'] = self._server_keytab_path()
+        env['KRB5_CLIENT_KTNAME'] = self._client_keytab_path()
+        return env
+        
+    def _create_database(self):
+        if os.path.exists(self.database_name):
+            return
+        kdb5_util = self.which('kdb5_util')
+        assert kdb5_util is not None, 'Cannot locate the kdb5_util executable'
+        env = self._kerberos_env()
+        self.ensure_dir(file=self.database_name)
+        proc = Popen([kdb5_util, 'create', '-s'], env=env, stdin=PIPE, stdout=PIPE, stderr=PIPE)
+        proc.communicate(bytes('{pwd}\n{pwd}'.format(pwd=self.kdc_db_password), 'ascii'))
+        if proc.wait() != 0:
+            self.out('Failed to create Kerberos database (tmp_dir=%s)' % (self.tmp_dir,))
+            self.out(proc.stdout.read())
+            self.out(proc.stderr.read())
+            raise RuntimeError('Failed to create Kerberos database')
+        self.out('Kerberos database created!')
+        
+    def _start(self):
+        krb5kdc = self.which('krb5kdc')
+        assert krb5kdc is not None, 'Cannot locate the krb5kdc executable'
+        env = self._kerberos_env()
+        self.ensure_dir(file=self._pid_file())
+        proc = Popen([krb5kdc, '-P', self._pid_file()], env=env, stdout=PIPE, stderr=PIPE)
+        
+        if proc.wait() != 0:
+            self.out("Failed to create Zookeeper chroot node")
+            self.out(proc.stdout.read())
+            self.out(proc.stderr.read())
+            raise RuntimeError("Failed to create Zookeeper chroot node")
+        # wait for pid file to be created
+        for t in range(60):
+            if self.pid():
+                break
+            time.sleep(1)
+        else:
+            raise RuntimeError('krb5kdc start timed out')
+        self.out("KDC is running!")
+
+    def _stop(self):
+        os.kill(self.pid(), signal.SIGTERM)
+        for t in range(60):
+            try:
+                os.kill(self.pid(), 0)
+            except ProcessLookupError as e:
+                break
+            time.sleep(1)
+        else:
+            os.kill(self.pid(), signal.SIGKILL)
+
+    def pid(self):
+        if os.path.exists(self._pid_file()):
+            return int(open(self._pid_file(), 'r').read().rstrip())
+        else:
+            return None
+
+    def open(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.database_name = os.path.join(self.tmp_dir, 'var', 'lib', 'krb5kdc', 'principal')
+        self.out('Running local KDC...')
+        self.out('  realm    = %s' % (self.realm,))
+        self.out('  udp_port = %s' % (self.udp_port,))
+        self.out('  udp_port = %s' % (self.tcp_port,))
+        self.out('  tmp_dir  = %s' % (self.tmp_dir,))
+
+        # Configure Zookeeper child process
+        kdc_conf_template = self.test_resource('trunk', 'kdc.conf')
+        self.render_template(kdc_conf_template, self._kdc_conf_path(), vars(self))
+        krb5_conf_template = self.test_resource('trunk', 'krb5.conf')
+        self.render_template(krb5_conf_template, self._krb5_conf_path(), vars(self))
+
+        self._create_database()
+        self._start()
+
+    def close(self):
+        self._stop()
+        shutil.rmtree(self.tmp_dir)
+        self.tmp_dir = None
+
+    def create_principal(self, principal, password):
+        kadmin = self.which('kadmin.local')
+        assert kadmin is not None, 'Cannot locate the kadmin executable'
+        env = self._kerberos_env()
+        proc = Popen([kadmin], env=env, stdin=PIPE, stdout=PIPE, stderr=PIPE)
+        (stdout, stderr) = proc.communicate(bytes('addprinc {princ}\n{pwd}\n{pwd}'.format(pwd=password, princ=principal), 'ascii'))
+        
+        if proc.wait() != 0 or not re.search(r'Principal "[^"]*" created', stdout.decode('utf-8')):
+            self.out('Failed to create Kerberos principal %s' % (principal,))
+            self.out(stdout.decode('utf-8'))
+            self.out(stderr.decode('utf-8'))
+            raise RuntimeError('Failed to create Kerberos principal')
+
+    def __repr__(self):
+        return 'KerberosFixture(realm={realm}, udp_port={udp_port}, tcp_port={tcp_port}, tmp_dir={tmp_dir}, pid={pid})'.format(pid=self.pid(), **vars(self))
+
+
+class JavaFixture(Fixture):
     kafka_version = os.environ.get('KAFKA_VERSION', '0.11.0.1')
     scala_version = os.environ.get("SCALA_VERSION", '2.8.0')
-    project_root = os.environ.get('PROJECT_ROOT', os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-    kafka_root = os.environ.get("KAFKA_ROOT", os.path.join(project_root, 'servers', kafka_version, "kafka-bin"))
+    kafka_root = os.environ.get("KAFKA_ROOT", os.path.join(Fixture.project_root, 'servers', kafka_version, "kafka-bin"))
     ivy_root = os.environ.get('IVY_ROOT', os.path.expanduser("~/.ivy2/cache"))
 
     @classmethod
@@ -66,7 +291,7 @@ class Fixture(object):
 
     @classmethod
     def test_resource(cls, filename):
-        return os.path.join(cls.project_root, "servers", cls.kafka_version, "resources", filename)
+        return super(JavaFixture, self).test_resource(cls.kafka_version, filename)()
 
     @classmethod
     def kafka_run_class_args(cls, *args):
@@ -78,23 +303,6 @@ class Fixture(object):
         env = os.environ.copy()
         env['KAFKA_LOG4J_OPTS'] = "-Dlog4j.configuration=file:%s" % self.test_resource("log4j.properties")
         return env
-
-    @classmethod
-    def render_template(cls, source_file, target_file, binding):
-        log.info('Rendering %s from template %s', target_file, source_file)
-        with open(source_file, "r") as handle:
-            template = handle.read()
-            assert len(template) > 0, 'Empty template %s' % source_file
-        with open(target_file, "w") as handle:
-            handle.write(template.format(**binding))
-            handle.flush()
-            os.fsync(handle)
-
-        # fsync directory for durability
-        # https://blog.gocept.com/2013/07/15/reliable-file-updates-with-python/
-        dirfd = os.open(os.path.dirname(target_file), os.O_DIRECTORY)
-        os.fsync(dirfd)
-        os.close(dirfd)
 
 
 class ZookeeperFixture(Fixture):
@@ -122,9 +330,6 @@ class ZookeeperFixture(Fixture):
         env = super(ZookeeperFixture, self).kafka_run_class_env()
         env['LOG_DIR'] = os.path.join(self.tmp_dir, 'logs')
         return env
-
-    def out(self, message):
-        log.info("*** Zookeeper [%s:%s]: %s", self.host, self.port or '(auto)', message)
 
     def open(self):
         self.tmp_dir = tempfile.mkdtemp()
@@ -177,6 +382,9 @@ class ZookeeperFixture(Fixture):
 
     def __del__(self):
         self.close()
+
+    def __repr__(self):
+        return 'Zookeeper [%s:%s]' % (self.host, self.port or '(auto)')
 
 
 class KafkaFixture(Fixture):
@@ -244,9 +452,6 @@ class KafkaFixture(Fixture):
         env['LOG_DIR'] = os.path.join(self.tmp_dir, 'logs')
         return env
 
-    def out(self, message):
-        log.info("*** Kafka [%s:%s]: %s", self.host, self.port or '(auto)', message)
-
     def open(self):
         if self.running:
             self.out("Instance already running")
@@ -276,7 +481,7 @@ class KafkaFixture(Fixture):
                                          "/%s" % self.zk_chroot,
                                          "kafka-python")
         env = self.kafka_run_class_env()
-        proc = subprocess.Popen(args, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        proc = Popen(args, env=env, stdout=PIPE, stderr=PIPE)
 
         if proc.wait() != 0:
             self.out("Failed to create Zookeeper chroot node")
@@ -335,3 +540,7 @@ class KafkaFixture(Fixture):
         self.out("Done!")
         shutil.rmtree(self.tmp_dir)
         self.running = False
+
+    def __repr__(self):
+        return 'Kafka [%s:%s]' % (self.host, self.port or '(auto)')
+
