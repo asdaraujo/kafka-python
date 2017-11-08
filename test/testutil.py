@@ -1,34 +1,31 @@
-import functools
-import logging
+import decorator
 import operator
 import os
+import pytest
 import random
-import socket
 import string
 import time
 import uuid
 
 from six.moves import xrange
-from . import unittest
 
-from kafka import SimpleClient
-from kafka.structs import OffsetRequestPayload
+from kafka import create_message, create_gzip_message, errors
+from kafka.structs import ProduceRequestPayload
+from test.fixtures import get_simple_consumer, random_string
 
 __all__ = [
-    'random_string',
-    'get_open_port',
     'kafka_versions',
-    'KafkaIntegrationTestCase',
-    'Timer',
 ]
 
-def random_string(l):
-    return "".join(random.choice(string.ascii_letters) for i in xrange(l))
+def kafka_version():
+    if 'KAFKA_VERSION' not in os.environ:
+        return ()
+    return version_str_to_list(os.environ['KAFKA_VERSION'])
+
+def version_str_to_list(s):
+    return tuple(map(int, s.split('.'))) # e.g., [0, 8, 1, 1]
 
 def kafka_versions(*versions):
-
-    def version_str_to_list(s):
-        return list(map(int, s.split('.'))) # e.g., [0, 8, 1, 1]
 
     def construct_lambda(s):
         if s[0].isdigit():
@@ -53,86 +50,99 @@ def kafka_versions(*versions):
         }
         op = op_map[op_str]
         version = version_str_to_list(v_str)
-        return lambda a: op(version_str_to_list(a), version)
+        return lambda a: op(a, version)
 
     validators = map(construct_lambda, versions)
 
     def kafka_versions(func):
-        @functools.wraps(func)
-        def wrapper(self):
-            kafka_version = os.environ.get('KAFKA_VERSION')
+        def wrapper(func, *args, **kwargs):
+            version = kafka_version()
 
-            if not kafka_version:
-                self.skipTest("no kafka version set in KAFKA_VERSION env var")
+            if not version:
+                pytest.skip("no kafka version set in KAFKA_VERSION env var")
 
             for f in validators:
-                if not f(kafka_version):
-                    self.skipTest("unsupported kafka version")
+                if not f(version):
+                    pytest.skip("unsupported kafka version")
 
-            return func(self)
-        return wrapper
+            return func(*args, **kwargs)
+        return decorator.decorator(wrapper, func)
+
     return kafka_versions
 
-def get_open_port():
-    sock = socket.socket()
-    sock.bind(("", 0))
-    port = sock.getsockname()[1]
-    sock.close()
-    return port
+_messages = {}
+def msg(s):
+    global _messages
+    if s not in _messages:
+        _messages[s] = '%s-%s' % (s, str(uuid.uuid4()))
 
-class KafkaIntegrationTestCase(unittest.TestCase):
-    create_client = True
-    topic = None
-    zk = None
-    server = None
+    return _messages[s].encode('utf-8')
 
-    def setUp(self):
-        super(KafkaIntegrationTestCase, self).setUp()
-        if not os.environ.get('KAFKA_VERSION'):
-            self.skipTest('Integration test requires KAFKA_VERSION')
+def key(k):
+    return k.encode('utf-8')
 
-        if not self.topic:
-            topic = "%s-%s" % (self.id()[self.id().rindex(".") + 1:], random_string(10))
-            self.topic = topic
+def send_messages(client, topic, partition, messages):
+    messages = [ create_message(msg(str(m))) for m in messages ]
+    produce = ProduceRequestPayload(topic, partition, messages = messages)
+    resp, = client.send_produce_request([produce])
+    assert resp.error == 0
 
-        if self.create_client:
-            self.client = SimpleClient('%s:%d' % (self.server.host, self.server.port))
+    return [ x.value for x in messages ]
 
-        self.client.ensure_topic_exists(self.topic)
+def send_gzip_message(client, topic, partition, messages):
+    message = create_gzip_message([(msg(str(m)), None) for m in messages])
+    produce = ProduceRequestPayload(topic, partition, messages = [message])
+    resp, = client.send_produce_request([produce])
+    assert resp.error == 0
 
-        self._messages = {}
+def assert_message_count(messages, num_messages):
+    # Make sure we got them all
+    assert len(messages) == num_messages
 
-    def tearDown(self):
-        super(KafkaIntegrationTestCase, self).tearDown()
-        if not os.environ.get('KAFKA_VERSION'):
-            return
+    # Make sure there are no duplicates
+    assert len(set(messages)) == num_messages
 
-        if self.create_client:
-            self.client.close()
 
-    def current_offset(self, topic, partition):
+def assert_topic_message_count(simple_client, topic, check_count, timeout=10,
+                               partitions=None, at_least=False):
+    simple_consumer = get_simple_consumer(simple_client, topic,
+                                          partitions=partitions,
+                                          auto_commit=False,
+                                          iter_timeout=timeout)
+    started_at = time.time()
+    pending = -1
+    while pending < check_count and (time.time() - started_at < timeout):
         try:
-            offsets, = self.client.send_offset_request([OffsetRequestPayload(topic, partition, -1, 1)])
-        except:
-            # XXX: We've seen some UnknownErrors here and can't debug w/o server logs
-            self.zk.child.dump_logs()
-            self.server.child.dump_logs()
-            raise
-        else:
-            return offsets.offsets[0]
+            pending = simple_consumer.pending(partitions)
+        except errors.FailedPayloadsError:
+            pass
+        time.sleep(0.5)
+    simple_consumer.stop()
 
-    def msgs(self, iterable):
-        return [ self.msg(x) for x in iterable ]
+    if pending < check_count:
+        pytest.fail('Too few pending messages: found %d, expected %d' %
+                  (pending, check_count))
+    elif pending > check_count and not at_least:
+        pytest.fail('Too many pending messages: found %d, expected %d' %
+                  (pending, check_count))
 
-    def msg(self, s):
-        if s not in self._messages:
-            self._messages[s] = '%s-%s-%s' % (s, self.id(), str(uuid.uuid4()))
+def wait_for_kafka_client_topic_update(client, expected_topics):
+    for t in range(1000):
+        client.poll(future=client.cluster.request_update())
+        client_topics = client.cluster.topics()
+        if set(expected_topics) == set(client_topics):
+            break
+        time.sleep(.01)
+    else:
+        assert set(expected_topics).intersection(client_topics) == set(expected_topics)
 
-        return self._messages[s].encode('utf-8')
-
-    def key(self, k):
-        return k.encode('utf-8')
-
+def wait_for_simple_client_topic_update(client, expected_topics):
+    for t in range(1000):
+        client_topics = set(map(lambda tp: tp.topic, client.topics_to_brokers.keys()))
+        if set(expected_topics) == set(client_topics):
+            break
+        client.load_metadata_for_topics()
+        time.sleep(.01)
 
 class Timer(object):
     def __enter__(self):

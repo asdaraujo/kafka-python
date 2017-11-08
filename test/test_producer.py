@@ -1,13 +1,12 @@
 import gc
 import platform
-import time
-import threading
-
 import pytest
+import threading
+import time
 
-from kafka import KafkaConsumer, KafkaProducer, TopicPartition
+from kafka import KafkaProducer, TopicPartition
 from kafka.producer.buffer import SimpleBufferPool
-from test.conftest import version
+from test.conftest import version, set_params
 from test.testutil import random_string
 
 
@@ -35,17 +34,16 @@ def test_end_to_end(kafka_broker, compression):
         elif platform.python_implementation() == 'PyPy':
             return
 
-    connect_str = ':'.join([kafka_broker.host, str(kafka_broker.port)])
-    producer = KafkaProducer(bootstrap_servers=connect_str,
-                             retries=5,
-                             max_block_ms=10000,
-                             compression_type=compression,
-                             value_serializer=str.encode)
-    consumer = KafkaConsumer(bootstrap_servers=connect_str,
-                             group_id=None,
-                             consumer_timeout_ms=10000,
-                             auto_offset_reset='earliest',
-                             value_deserializer=bytes.decode)
+    (producer,) = kafka_broker.get_producers(cnt=1,
+                                             retries=5,
+                                             max_block_ms=10000,
+                                             compression_type=compression,
+                                             value_serializer=str.encode)
+    (consumer,) = kafka_broker.get_consumers(cnt=1, topics=[],
+                                             group_id=None,
+                                             consumer_timeout_ms=10000,
+                                             auto_offset_reset='earliest',
+                                             value_deserializer=bytes.decode)
 
     topic = random_string(5)
 
@@ -83,11 +81,10 @@ def test_kafka_producer_gc_cleanup():
 @pytest.mark.skipif(not version(), reason="No KAFKA_VERSION set")
 @pytest.mark.parametrize("compression", [None, 'gzip', 'snappy', 'lz4'])
 def test_kafka_producer_proper_record_metadata(kafka_broker, compression):
-    connect_str = ':'.join([kafka_broker.host, str(kafka_broker.port)])
-    producer = KafkaProducer(bootstrap_servers=connect_str,
-                             retries=5,
-                             max_block_ms=10000,
-                             compression_type=compression)
+    (producer,) = kafka_broker.get_producers(cnt=1,
+                                             retries=5,
+                                             max_block_ms=10000,
+                                             compression_type=compression)
     magic = producer._max_usable_produce_magic()
 
     topic = random_string(5)
